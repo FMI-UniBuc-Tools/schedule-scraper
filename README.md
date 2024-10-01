@@ -2,18 +2,23 @@
 
 ## Overview
 
-This project is a Python-based tool designed to automate the process of downloading images and text files from specified URLs, performing Optical Character Recognition (OCR) to extract text from images, and compiling the results into consolidated PDF documents. It leverages web scraping techniques to extract specific links from a target webpage, processes each link to gather necessary data, and generates PDFs with embedded OCR text and clickable links.
+This is a Python project that utilizes various tools and libraries to locally reconstruct a PDF from the Google Drive platform, for which download permissions have been disabled. The implemented logic can work with any PDF, but this project specifically focuses on the timetables of the Faculty of Mathematics and Computer Science.
 
 The implemented logic can work with any PDF, but this project specifically focuses on the timetables of the Faculty of Mathematics and Computer Science.
 
 ## Features
 
-- **Web Scraping**: Utilizes Selenium WebDriver to extract specific bit.ly links containing "grupe" or "teacher" from a target webpage.
-- **Asynchronous Downloads**: Employs `aiohttp` to concurrently download images and text files for efficient data retrieval.
-- **OCR Processing**: Integrates PaddleOCR to perform text extraction from images, enabling searchable and selectable text within PDFs.
+- **Web Scraping**: Utilizes methods from the Selenium WebDriver library to navigate the structure of the timetable page and extract links from the site's requests, which are necessary for reconstructing the PDF.
+- **Asynchronous Downloads**: Since the timetables in question contain hundreds of pages, file downloads are performed asynchronously to optimize the efficiency of the script.
+- **OCR Processing**: In some cases, files may contain pages with only images and no text. To allow content to be searchable throughout the entire PDF, we use the PaddleOCR model to recognize the text that appears in images.
 - **PDF Generation**: Uses ReportLab to create PDF documents with images and overlaid OCR text, maintaining the layout and enabling clickable URLs.
-- **PDF Merging**: Combines individual PDF pages into a single consolidated PDF using PyPDF2.
-- **Cleanup**: Automatically removes temporary files post-processing to maintain a clean working directory.
+- **PDF Merging**: Once the necessary images and texts have been downloaded, we overlay the images with the corresponding texts and create the PDF.
+- **Cleanup**: Upon completion of the reconstruction process, the script deletes the temporary files that were generated or downloaded.
+
+## Why It Was Implemented This Way:
+
+- It may seem like too many tools are being used for web page manipulation and content downloading, but this is due to the limitations of the requests library (which can retrieve the content of a response from a request but cannot identify the requests made by a site) and the low efficiency of the Selenium library (which is not fast enough for this task, as it loads entire pages and simulates real user input).
+- The introduction of an OCR model might seem like overkill for this project, but its use is necessary when a PDF has not been properly uploaded. We tried several common OCR models, such as pytesseract or EasyOCR, but PaddleOCR achieved the best results in terms of character recognition. Another factor in choosing PaddleOCR was the ease of setup, as PaddleOCR excels here, with its setup consisting simply of installing the libraries via terminal commands.
 
 ## Prerequisites
 
@@ -37,6 +42,8 @@ The project relies on the following Python libraries:
 - `Pillow==10.0.1`
 - `numpy==1.23.5`
 - `opencv-python-headless==4.7.0.72`
+
+They can be found inside the dependencies file.
 
 ### Usage Tutorial
 
