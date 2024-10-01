@@ -4,6 +4,8 @@
 
 This project is a Python-based tool designed to automate the process of downloading images and text files from specified URLs, performing Optical Character Recognition (OCR) to extract text from images, and compiling the results into consolidated PDF documents. It leverages web scraping techniques to extract specific links from a target webpage, processes each link to gather necessary data, and generates PDFs with embedded OCR text and clickable links.
 
+The implemented logic can work with any PDF, but this project specifically focuses on the timetables of the Faculty of Mathematics and Computer Science.
+
 ## Features
 
 - **Web Scraping**: Utilizes Selenium WebDriver to extract specific bit.ly links containing "grupe" or "teacher" from a target webpage.
