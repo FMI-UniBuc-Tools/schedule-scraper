@@ -339,7 +339,7 @@ def download_schedule(path, num_pages, img_default_link, json_default_link):
     os.rmdir("images")
     os.rmdir("texts")
 
-def get_hrefs_with_data_type(url, data_type="URL", wait_time=5):
+def get_hrefs_with_data_type(url):
     """
     Extracts specific href links from a webpage using Selenium WebDriver and processes each link.
 
@@ -360,9 +360,7 @@ def get_hrefs_with_data_type(url, data_type="URL", wait_time=5):
 
         driver = webdriver.Chrome(options=chrome_options)
         driver.get(url)
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-
-        bitly_xpath = '//a[contains(@href, "bit.ly") and (contains(text(), "grupe") or contains(text(), "teacher"))]'
+        bitly_xpath = '//a[contains(@href, "bit.ly") and (contains(text(), "grupelor") or contains(text(), "profesorilor"))]'
         bitly_links = driver.find_elements(By.XPATH, bitly_xpath)
         hrefs = [link.get_attribute('href') for link in bitly_links]
 
@@ -421,10 +419,8 @@ def get_hrefs_with_data_type(url, data_type="URL", wait_time=5):
         driver.quit()
 
 if __name__ == "__main__":
-    target_url = "https://fmi.unibuc.ro/orar/"  # Replace with your target URL
+    target_url = "https://fmi.unibuc.ro/orar/"
     print(f"Fetching all hrefs with data-type='URL' from {target_url}...\n")
     get_hrefs_with_data_type(
         url=target_url,
-        data_type="URL",
-        wait_time=5      
     )
