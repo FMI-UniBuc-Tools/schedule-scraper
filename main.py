@@ -421,7 +421,7 @@ def get_hrefs_with_data_type(url, data_type="URL", wait_time=5):
         driver.quit()
 
 if __name__ == "__main__":
-    target_url = "https://fmi.unibuc.ro/orar/orar-2023-2024/"  # Replace with your target URL
+    target_url = "https://fmi.unibuc.ro/orar/"  # Replace with your target URL
     print(f"Fetching all hrefs with data-type='URL' from {target_url}...\n")
     get_hrefs_with_data_type(
         url=target_url,
