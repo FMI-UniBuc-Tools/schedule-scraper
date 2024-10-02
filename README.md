@@ -53,7 +53,7 @@ They can be found inside the dependencies file.
 pip install -r dependencies.txt
 ```
 
-- Update the target_url variable with the latest url of the page. The target_url is located inside the within the `__main__` block.
+- Update the target_url variable with the latest url of the page. The target_url is located inside the `__main__` block.
 - Run the code and wait for the pdf files to be generated. It may take up to a couple of minutes, based on the quality of the internet connection and the size of the files.
 
 
