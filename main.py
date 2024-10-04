@@ -1,24 +1,31 @@
-import sys
 import asyncio
-import os
 import json
+import os
 import re
+import shutil
+import sys
+
 from multiprocessing import Pool
-from PyPDF2 import PdfMerger
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.common.exceptions import WebDriverException
+
 import requests
 import aiohttp
+
+from paddleocr import PaddleOCR
+from PIL import Image
+from PyPDF2 import PdfMerger
+
 from reportlab.lib import pagesizes
 from reportlab.lib.pagesizes import landscape
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
-from paddleocr import PaddleOCR
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
-from PIL import Image
+
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import WebDriverException
+
 
 # Set the appropriate event loop policy for Windows platforms
 if sys.platform.startswith('win'):
@@ -336,8 +343,8 @@ def download_schedule(path, num_pages, img_default_link, json_default_link):
     pdf_generator(num_pages, path)
 
     # Remove the images and texts directories after processing
-    os.rmdir("images")
-    os.rmdir("texts")
+    shutil.rmtree("images")
+    shutil.rmtree("texts")
 
 def get_hrefs_with_data_type(url):
     """
@@ -420,6 +427,7 @@ def get_hrefs_with_data_type(url):
 
 if __name__ == "__main__":
     target_url = "https://fmi.unibuc.ro/orar/"
+    # target_url = "https://fmi.unibuc.ro/orar/orar-2023-2024/"
     print(f"Fetching all hrefs with data-type='URL' from {target_url}...\n")
     get_hrefs_with_data_type(
         url=target_url,
