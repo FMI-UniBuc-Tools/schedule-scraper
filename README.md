@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a Python project that utilizes various tools and libraries to locally reconstruct a PDF from the Google Drive platform, for which download permissions have been disabled. The implemented logic can work with any PDF, but this project specifically focuses on the timetables of the Faculty of Mathematics and Computer Science.
+This is a Python project that utilizes various tools and libraries to locally reconstruct a PDF from the Google Drive platform, for which download permissions have been disabled.
 
 The implemented logic can work with any PDF, but this project specifically focuses on the timetables of the Faculty of Mathematics and Computer Science.
 
