@@ -54,4 +54,9 @@ pip install -r dependencies.txt
 - Update the target_url variable with the latest url of the page. The target_url is located inside the `__main__` block.
 - Run the code and wait for the pdf files to be generated. It may take up to a couple of minutes, based on the quality of the internet connection and the size of the files.
 
+Example of terminal command to use the script (this example uses optional arguments to filter the data that is downloaded):
+
+```console
+python3 main.py --year_range 2023-2024 --semester 1 --schedule_type profesori
+```
 
