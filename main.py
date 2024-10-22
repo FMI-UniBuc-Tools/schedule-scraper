@@ -4,94 +4,147 @@ import os
 import re
 import shutil
 import sys
-
-from multiprocessing import Pool
-
+import copy
 import requests
 import aiohttp
+import argparse
 
 from paddleocr import PaddleOCR
 from PIL import Image
-from PyPDF2 import PdfMerger
 
 from reportlab.lib import pagesizes
-from reportlab.lib.pagesizes import landscape
-from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.lib.pagesizes import landscape, A4
 from reportlab.pdfgen import canvas
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.utils import ImageReader
+
+from bs4 import BeautifulSoup
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.common.exceptions import WebDriverException
-
+import time
 
 # Set the appropriate event loop policy for Windows platforms
 if sys.platform.startswith('win'):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-async def download_image(session, url, page_number):
+async def download_image(session, url, page_number, max_retries=None, cooldown=5):
     """
     Asynchronously downloads an image from a modified URL and saves it locally.
+    Retries indefinitely or up to `max_retries` times if the download fails.
 
     Args:
         session (aiohttp.ClientSession): The HTTP session to use for the request.
         url (str): The base URL to modify and download the image from.
         page_number (int): The page number to replace in the URL.
+        max_retries (int, optional): Maximum number of retries. If None, retries indefinitely.
+        cooldown (int, optional): Seconds to wait before retrying after a failure.
     """
     modified_url = url.replace("page=0", f"page={page_number}")
-    async with session.get(modified_url) as response:
-        if response.status == 200:
-            content = await response.read()
-            with open(f"images/image_page_{page_number}.jpg", "wb") as f:
-                f.write(content)
-        else:
-            print(f"Failed to download image from page {page_number}")
+    final_url = re.sub(r'w=\d+', 'w=1600', modified_url)
+    
+    attempt = 0
+    while True:
+        try:
+            async with session.get(final_url) as response:
+                if response.status == 200:
+                    content = await response.read()
+                    # Ensure the directory exists
+                    os.makedirs("images", exist_ok=True)
+                    file_path = f"images/image_page_{page_number}.jpg"
+                    with open(file_path, "wb") as f:
+                        f.write(content)
+                    break  # Exit the loop on success
+                else:
+                    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [WARNING] Failed to download image from page {page_number}, status: {response.status}")
+        except aiohttp.ClientError as e:
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [ERROR] Client error while downloading image from page {page_number}: {e}")
+        except Exception as e:
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [ERROR] Unexpected error while downloading image from page {page_number}: {e}")
+        
+        attempt += 1
+        if max_retries is not None and attempt >= max_retries:
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [ERROR] Exceeded maximum retries for image page {page_number}")
+            break  # Exit the loop after reaching max retries
+        
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [INFO] Retrying image download for page {page_number} after {cooldown} seconds...")
+        await asyncio.sleep(cooldown)
 
-async def download_text(session, url, page_number):
+async def download_text(session, url, page_number, max_retries=None, cooldown=5):
     """
     Asynchronously downloads a text file from a modified URL, processes it, and saves it locally.
+    Retries indefinitely or up to `max_retries` times if the download fails.
 
     Args:
         session (aiohttp.ClientSession): The HTTP session to use for the request.
         url (str): The base URL to modify and download the text from.
         page_number (int): The page number to replace in the URL.
+        max_retries (int, optional): Maximum number of retries. If None, retries indefinitely.
+        cooldown (int, optional): Seconds to wait before retrying after a failure.
     """
     modified_url = url.replace("page=0", f"page={page_number}")
-    async with session.get(modified_url) as response:
-        if response.status == 200:
-            content = await response.text()
-            lines = content.splitlines()[1:]
-            content_without_first_line = "\n".join(lines)
-            with open(f"texts/text_page_{page_number}.txt", "w", encoding="utf-8") as f:
-                f.write(content_without_first_line)
-        else:
-            print(f"Failed to download text from page {page_number}")
+    
+    attempt = 0
+    while True:
+        try:
+            async with session.get(modified_url) as response:
+                if response.status == 200:
+                    content = await response.text()
+                    lines = content.splitlines()
+                    if len(lines) > 1:
+                        content_without_first_line = "\n".join(lines[1:])
+                    else:
+                        content_without_first_line = ""
+                        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [WARNING] Text content from page {page_number} has only one line.")
+                    
+                    # Ensure the directory exists
+                    os.makedirs("texts", exist_ok=True)
+                    file_path = f"texts/text_page_{page_number}.txt"
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(content_without_first_line)
+                    
+                    break 
+        except aiohttp.ClientError as e:
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [ERROR] Client error while downloading text from page {page_number}: {e}")
+        except Exception as e:
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [ERROR] Unexpected error while downloading text from page {page_number}: {e}")
+        
+        attempt += 1
+        if max_retries is not None and attempt >= max_retries:
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [ERROR] Exceeded maximum retries for text page {page_number}")
+            break  # Exit the loop after reaching max retries
+        
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [INFO] Retrying text download for page {page_number} after {cooldown} seconds...")
+        await asyncio.sleep(cooldown)
 
-async def download_content(num_pages, img_default_link, json_default_link):
+async def download_content(num_pages, img_default_link, json_default_link, max_retries=None, cooldown=5):
     """
     Orchestrates the asynchronous downloading of images and text files for all pages.
+    Retries each download until successful or until `max_retries` is reached.
 
     Args:
         num_pages (int): The total number of pages to download.
         img_default_link (str): The base URL for downloading images.
         json_default_link (str): The base URL for downloading text files.
+        max_retries (int, optional): Maximum number of retries for each download. If None, retries indefinitely.
+        cooldown (int, optional): Seconds to wait before retrying after a failure.
     """
     async with aiohttp.ClientSession() as session:
         tasks = []
         for i in range(num_pages):
-            tasks.append(download_image(session, img_default_link, i))
-            tasks.append(download_text(session, json_default_link, i))
+            tasks.append(download_image(session, img_default_link, i, max_retries, cooldown))
+            tasks.append(download_text(session, json_default_link, i, max_retries, cooldown))
+        
+        # Run all tasks concurrently
         await asyncio.gather(*tasks)
 
-def create_pdf_with_ocr_text(image_path, pdf_path):
+
+def process_page_with_ocr(image_path, c):
     """
-    Creates a PDF from an image by performing OCR to extract text and overlaying the text on the image.
+    Creates a PDF page from an image by performing OCR to extract text and overlaying the text on the image.
 
     Args:
         image_path (str): The file path to the input image.
-        pdf_path (str): The file path where the output PDF will be saved.
+        c (canvas.Canvas): The ReportLab canvas object where the content is added.
     """
     # Initialize PaddleOCR with angle classification and English language support
     ocr_model = PaddleOCR(use_angle_cls=True, lang='en')
@@ -105,8 +158,6 @@ def create_pdf_with_ocr_text(image_path, pdf_path):
             text = line[1][0]
             text_positions.append((bbox, text))
 
-    # Initialize a ReportLab canvas with landscape A4 size
-    c = canvas.Canvas(pdf_path, pagesize=landscape(pagesizes.A4))
     page_width, page_height = landscape(pagesizes.A4)
 
     # Open the image to get its dimensions
@@ -173,9 +224,9 @@ def create_pdf_with_ocr_text(image_path, pdf_path):
     # Draw the text overlay onto the PDF
     c.drawText(text_writer)
 
-    # Finalize and save the PDF
+    # Finalize the page and proceed to the next one
     c.showPage()
-    c.save()
+
 
 def adjust_y(y, height):
     """
@@ -190,49 +241,67 @@ def adjust_y(y, height):
     """
     return height - y
 
-def process_page(counter):
+
+def process_page(counter, c, page_width, page_height):
     """
     Processes a single page by either generating a PDF with OCR text or overlaying existing text data.
 
     Args:
         counter (int): The page number to process.
+
+This is my current code. How to implement your suggestions?
+        c (canvas.Canvas): The ReportLab canvas object to draw on.
+        page_width (float): The width of the PDF page.
+        page_height (float): The height of the PDF page.
     """
-    if not os.path.exists(f"texts/text_page_{counter}.txt"):
-        create_pdf_with_ocr_text(f"images/image_page_{counter}.jpg", f"out_page_{counter}.pdf")
+    text_path = f"texts/text_page_{counter}.txt"
+    image_path = f"images/image_page_{counter}.jpg"
+
+    try:
+        with open(text_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        unknown, width, height, tree = data[:4]
+    except:
+        print(f"Error reading text file for page {counter}. Using OCR instead.")
+        process_page_with_ocr(image_path, c)
         return
 
-    with open(f"texts/text_page_{counter}.txt", "r", encoding="utf-8") as f:
-        data = json.load(f)
+    img = Image.open(image_path)
+    img.save(image_path, format = 'JPEG', quality = 50, optimize = True)
 
-    unknown, width, height, tree = data[:4]
-    c = canvas.Canvas(f"out_page_{counter}.pdf", pagesize=landscape(pagesizes.A4))
-    page_width, page_height = landscape(pagesizes.A4)
-
+    # Draw the image at (0,0) filling the entire page
+    img_reader = ImageReader(image_path)
     c.drawImage(
-        f"images/image_page_{counter}.jpg",
-        0,
-        0,
+        img_reader,
+        0,  # x-coordinate
+        0,  # y-coordinate
         width=page_width,
         height=page_height,
-        preserveAspectRatio=True
+        preserveAspectRatio=False,  # Stretch to fill the page
+        mask='auto'  # Handle transparency if present
     )
 
+    # Initialize text overlay
     text_writer = c.beginText()
-    text_writer.setTextRenderMode(3)
+    text_writer.setTextRenderMode(3)  # Invisible text (for OCR overlay)
 
-    url_pattern = re.compile(
-        r'(https?://\S+|www\.\S+|bit\.ly/\S+)', re.IGNORECASE)
+    # Define URL pattern
+    url_pattern = re.compile(r'(https?://\S+|www\.\S+|bit\.ly/\S+)', re.IGNORECASE)
     link_annotations = []
 
     for _, ((_, children),) in tree:
         for (y, x, h, w), node in children:
             font_size = 9
-            while stringWidth(node, text_writer._fontname, font_size) < w:
-                font_size += 0.5
-            text_writer.setFont(text_writer._fontname, font_size)
-            text_writer.setTextOrigin(x, adjust_y(y, height) - 10)
+            font_name = "Helvetica"  # Ensure a standard font is used
+            text_writer.setFont(font_name, font_size)
+
+            # Adjust Y-coordinate
+            adjusted_y = adjust_y(y, page_height) - 10  # Adjust as needed
+            text_writer.setTextOrigin(x, adjusted_y)
             text_writer.textOut(node)
 
+            # Detect URLs
             match = url_pattern.search(node)
             if match:
                 url_text = match.group(0)
@@ -246,6 +315,7 @@ def process_page(counter):
 
     c.drawText(text_writer)
 
+    # Add URL links
     for link in link_annotations:
         x = link['x']
         y = link['y']
@@ -257,74 +327,53 @@ def process_page(counter):
             actual_url = 'http://' + actual_url
 
         x1 = x
-        y1 = adjust_y(y + h, height)
+        y1 = adjust_y(y + h, page_height)
         x2 = x + w
-        y2 = adjust_y(y, height)
+        y2 = adjust_y(y, page_height)
 
         rect = (x1, y1, x2, y2)
         c.linkURL(actual_url, rect, relative=0, thickness=0)
 
-    c.save()
+    # Finalize the page
+    c.showPage()
 
     # Clean up the image and text files for the processed page
     try:
-        os.remove(f"images/image_page_{counter}.jpg")
+        os.remove(image_path)
     except FileNotFoundError:
         pass
     try:
-        os.remove(f"texts/text_page_{counter}.txt")
+        os.remove(text_path)
     except FileNotFoundError:
         pass
 
-def merge_pdfs(num_pages, path):
-    """
-    Merges individual PDF pages into a single consolidated PDF file.
-
-    Args:
-        num_pages (int): The total number of PDF pages to merge.
-        path (str): The file path for the final merged PDF.
-    """
-    merger = PdfMerger()
-    for counter in range(num_pages):
-        pdf_path = f'out_page_{counter}.pdf'
-        if os.path.exists(pdf_path):
-            merger.append(pdf_path)
-        else:
-            print(f"Warning: {pdf_path} does not exist and will be skipped.")
-    merger.write(path)
-    merger.close()
-
-def clean_up(num_pages):
-    """
-    Removes individual PDF page files after they have been merged.
-
-    Args:
-        num_pages (int): The total number of PDF pages to remove.
-    """
-    for counter in range(num_pages):
-        pdf_path = f'out_page_{counter}.pdf'
-        try:
-            os.remove(pdf_path)
-        except FileNotFoundError:
-            print(f"Warning: {pdf_path} not found and cannot be removed.")
-        except Exception as e:
-            print(f"Error removing {pdf_path}: {e}")
 
 def pdf_generator(num_pages, path):
     """
-    Processes all PDF pages, merges them into a single PDF, and performs cleanup.
+    Processes all PDF pages, adds them to a single PDF, and performs cleanup.
 
     Args:
         num_pages (int): The total number of PDF pages to process.
         path (str): The file path for the final merged PDF.
     """
+    # Initialize the ReportLab canvas with landscape A4 size
+    a4_landscape = landscape(A4)
+    page_width, page_height = a4_landscape
+    c = canvas.Canvas(path, pagesize=a4_landscape)
+
+    
+    c.setPageCompression(True)
+
+
     for counter in range(num_pages):
         try:
-            process_page(counter)
+            process_page(counter, c, page_width, page_height)
         except Exception as e:
             print(f"Error processing page {counter}: {e}")
-    merge_pdfs(num_pages, path)
-    clean_up(num_pages)
+
+    # Save the single PDF after all pages have been added
+    c.save()
+
 
 def download_schedule(path, num_pages, img_default_link, json_default_link):
     """
@@ -340,95 +389,325 @@ def download_schedule(path, num_pages, img_default_link, json_default_link):
     os.makedirs("texts", exist_ok=True)
 
     asyncio.run(download_content(num_pages, img_default_link, json_default_link))
+    
+    try:
+        with open("texts/text_page_0.txt", "r", encoding="utf-8") as f:
+            data = f.read()
+        pattern = r'Actualizat:.*?(\d{2}\.\d{2}\.\d{4})'
+        date = re.search(pattern, data, re.DOTALL)
+        path = path + "-" + date.group(1) + ".pdf"
+    except:
+        path = path + ".pdf"
+        print("An error occurred while trying to extract the date from the text file.")
+
     pdf_generator(num_pages, path)
 
     # Remove the images and texts directories after processing
     shutil.rmtree("images")
     shutil.rmtree("texts")
 
-def get_hrefs_with_data_type(url):
+def setup_selenium():
     """
-    Extracts specific href links from a webpage using Selenium WebDriver and processes each link.
+    Sets up the Selenium WebDriver with Chrome and enables logging of network requests.
+
+    Returns:
+        webdriver.Chrome: Configured Selenium Chrome WebDriver instance.
+    """
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")  # Run in headless mode
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+
+    # Enable performance logging
+    chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+
+    # Initialize the Chrome WebDriver
+    driver = webdriver.Chrome(options=chrome_options)
+    return driver
+
+def get_specific_network_requests(driver, timeout=30):
+    """
+    Retrieves the first occurrence of specific network request URLs captured by Selenium.
 
     Args:
-        url (str): The target URL to scrape for href links.
-        data_type (str, optional): The type of data to filter hrefs. Defaults to "URL".
-        wait_time (int, optional): Time to wait for page elements to load. Defaults to 5 seconds.
+        driver (webdriver.Chrome): Selenium WebDriver instance.
+        timeout (int, optional): Maximum time to wait for network activity to complete in seconds.
+
+    Returns:
+        dict: A dictionary containing the first URLs matching each specified substring.
     """
-    try:
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--ignore-certificate-errors")
-        chrome_options.add_argument("--enable-logging")
-        chrome_options.add_argument("--log-level=0")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
+    # Define the substrings to search for and their corresponding keys
+    desired_substrings = {
+        "json_default_link": "presspage?ck",
+        "img_default_link": "img",
+        "presspage_link": "meta?ck"
+    }
 
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.get(url)
-        bitly_xpath = '//a[contains(@href, "bit.ly") and (contains(text(), "grupelor") or contains(text(), "profesorilor"))]'
-        bitly_links = driver.find_elements(By.XPATH, bitly_xpath)
-        hrefs = [link.get_attribute('href') for link in bitly_links]
+    # Initialize the dictionary to store the first occurrence of each substring
+    network_requests = {key: None for key in desired_substrings}
 
-        print(f"Found {len(hrefs)} bitly links.")
-        counter = 0
+    start_time = time.time()
 
-        for bitly_href in hrefs:
+    while True:
+        # Fetch performance logs
+        try:
+            logs = driver.get_log('performance')
+        except Exception as e:
+            print(f"    Error fetching performance logs: {e}")
+            break
+
+        for entry in logs:
             try:
-                print(f"\nProcessing {bitly_href}...")
-                counter += 1
-                link_text = f"orar_{counter}"
+                log = json.loads(entry['message'])['message']
+                if log['method'] == 'Network.requestWillBeSent':
+                    request_url = log['params']['request']['url']
+                    for key, substr in desired_substrings.items():
+                        if network_requests[key] is None and substr in request_url:
+                            network_requests[key] = request_url
+                            break  # Prevent checking other substrings for the same URL
+            except (json.JSONDecodeError, KeyError) as e:
+                # Skip malformed log entries
+                continue
 
-                with webdriver.Chrome(options=chrome_options) as new_driver:
-                    new_driver.get(bitly_href)
-                    logs = new_driver.get_log("performance")
+        # Check if all desired URLs have been found
+        if all(value is not None for value in network_requests.values()):
+            break
 
-                    img_default_link = None
-                    json_default_link = None
-                    pages_json = None
+        # Break the loop if timeout is reached
+        if time.time() - start_time > timeout:
+            print("    Timeout reached while capturing network requests.")
+            break
 
-                    for entry in logs:
-                        log = json.loads(entry["message"])["message"]
-                        if log["method"] == "Network.requestWillBeSent":
-                            request_url = log["params"]["request"]["url"]
-                            if "meta?ck" in request_url:
-                                pages_json = request_url
-                            if "img" in request_url:
-                                img_default_link = request_url
-                                json_default_link = request_url.replace("img", "presspage")
-                                break
-                            if "presspage" in request_url:
-                                json_default_link = request_url
-                                img_default_link = request_url.replace("presspage", "img")
-                                break
+    return network_requests
 
-                    if pages_json:
-                        response = requests.get(pages_json)
-                        content = response.text
-                        cleaned_content = content.lstrip(")]}'")
-                        data = json.loads(cleaned_content)
-                        num_pages = data.get('pages')
-                        download_schedule(f"{link_text}.pdf", num_pages, img_default_link, json_default_link)
-                    else:
-                        print(f"No pages_json found for {bitly_href}")
+def get_num_pages(meta_ck_url):
+    """
+    Retrieves the number of pages from the provided meta?ck URL.
 
-            except WebDriverException as e:
-                print(f"WebDriverException occurred while processing {bitly_href}: {e}")
-            except Exception as e:
-                print(f"An error occurred while processing {bitly_href}: {e}")
+    Args:
+        meta_ck_url (str): The URL containing the meta?ck parameter.
 
-    except WebDriverException as e:
-        print(f"WebDriverException occurred while accessing {url}: {e}")
+    Returns:
+        int: The number of pages extracted from the JSON response.
+    """
+    if not meta_ck_url:
+        return 0
+
+    try:
+        response = requests.get(meta_ck_url)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        content = response.text
+        cleaned_content = content.lstrip(")]}'")
+        data = json.loads(cleaned_content)
+        num_pages = data.get('pages', 0)
+        return num_pages
     except Exception as e:
-        print(f"An error occurred while accessing {url}: {e}")
+        print(f"    Error fetching num_pages from {meta_ck_url}: {e}")
+        return 0
+
+def enrich_link_data(driver, links):
+    """
+    Processes a single Bit.ly link by visiting it, capturing specific network requests,
+    and extracting additional information.
+
+    Args:
+        driver (webdriver.Chrome): Selenium WebDriver instance.
+        links (dict): Dictionary containing 'url', 'text', and 'semester'.
+
+    Returns:
+        dict: The enriched link_data dictionary with added 'json_default_link',
+              'img_default_link', and 'num_pages'.
+    """
+    results = []
+    for link_data in links:
+        url = link_data['url']
+        text = link_data['text']
+        semester = link_data['semester']
+        year = link_data['year']
+
+        specific_network_urls = {}
+
+        try:
+            driver.get(url)
+            # Wait for the page to load and network requests to complete
+            time.sleep(5)  # Adjust sleep time as needed based on page complexity
+            specific_network_urls = get_specific_network_requests(driver)
+        except Exception as e:
+            print(f"    Error visiting {url}: {e}")
+
+        # Extract the desired URLs
+        json_default_link = specific_network_urls.get('json_default_link')
+        img_default_link = specific_network_urls.get('img_default_link')
+        meta_ck_url = specific_network_urls.get('presspage_link')
+
+        # Get num_pages from json_default_link
+        num_pages = get_num_pages(meta_ck_url)
+
+        # Enrich the link_data dictionary
+        enriched_link_data = {
+            'text': text,
+            'year': year,
+            'semester': semester,
+            'num_pages': num_pages,
+            'img_default_link': img_default_link,
+            'json_default_link': json_default_link
+        }
+        results.append(enriched_link_data)
+
+    return results
+
+def get_hrefs_with_data_type(urls, filter_words):
+    """
+    Retrieves Bit.ly links from the specified URLs, assigning semester numbers and extracting the academic year.
+
+    Args:
+        urls (list): A list of URLs of the webpages to scrape.
+        filter_words (list, optional): List of words to filter the link texts.
+
+    Returns:
+        list: A list of dictionaries, each containing 'url', 'text', 'semester', and 'year'.
+    """
+    flattened_links = []
+
+    # Define the regex pattern for year extraction
+    year_pattern = re.compile(r'(\d{4}-\d{4})')
+
+    for url in urls:
+        try:
+            # Fetch the web page
+            response = requests.get(url)
+            response.raise_for_status()  # Check for HTTP errors
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching the URL '{url}': {e}")
+            continue  # Skip to the next URL instead of returning
+
+        # Parse the HTML content
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Extract the title and find the year
+        page_text = soup.get_text(separator=' ', strip=True)
+        year_match = year_pattern.search(page_text)
+        if year_match:
+            academic_year = year_match.group(1)
+
+        # Find all <h2> elements with class 'wp-block-heading' containing 'Semestrul'
+        h2_elements = soup.find_all('h2', string=re.compile(r'Semestrul', re.IGNORECASE))
+
+        if not h2_elements:
+            print(f"No semester headers found in '{url}'.")
+            continue  # Skip to the next URL
+
+        semester = len(h2_elements)
+
+        for h2 in h2_elements:
+            # Find all sibling elements after the current <h2> until the next <h2>
+            siblings = h2.find_next_siblings()
+            for sibling in siblings:
+                if sibling.name == 'h2' and 'semestrul' in sibling.get_text(strip=True).lower():
+                    break  # Stop if the next semester <h2> is encountered
+
+                # Within the sibling, find all <a> tags with 'bit.ly' in href
+                a_tags = sibling.find_all('a', href=True)
+                for a_tag in a_tags:
+                    href = a_tag['href']
+                    if 'bit.ly' in href or 'drive.google.com' in href:
+                        link_text = a_tag.get_text(strip=True)
+                        link_text.replace(" ", "")
+
+                        if any(word.lower() in link_text.lower() for word in filter_words):
+                            flattened_links.append({
+                                'url': href,
+                                'text': link_text,
+                                'semester': semester,
+                                'year': academic_year
+                            })
+            semester -= 1
+
+    return flattened_links
+
+def parse_year_range(year_range_str):
+    # Split the string "year-year" into two integers
+    start_year, end_year = map(int, year_range_str.split('-'))
+    
+    # Ensure that the difference between years is at most 1
+    if end_year - start_year > 1:
+        year_range_list = [f"{start_year}-{start_year+1}", f"{start_year+1}-{end_year}"]
+    else:
+        year_range_list = [year_range_str]
+    
+    return year_range_list
+
+def filter_links_by_semester_and_type(links, semesters=None, schedule_type=None):
+    filtered_links = []
+    for link in links:
+        # Filter by semesters if provided
+        if semesters is not None and link['semester'] not in semesters:
+            continue
+        # Filter by schedule type if provided
+        if schedule_type is not None and schedule_type not in link['text'].lower():
+            continue
+        filtered_links.append(link)
+    return filtered_links
+
+if __name__ == "__main__":
+    # CLI argument parsing
+    parser = argparse.ArgumentParser(description="Download schedules based on year range, semester, and type filter.")
+    
+    # Optional: year range argument
+    parser.add_argument("--year_range", help="Year range of the form 'year-year' (e.g., 2022-2024). If not provided, downloads all years.")
+    
+    # Optional: semester filter (1 for first semester, 2 for second semester)
+    parser.add_argument("--semester", type=int, choices=[1, 2], help="Which semester to download: 1 for first, 2 for second.")
+    
+    # Optional: type filter (grupe, profesori)
+    parser.add_argument("--schedule_type", choices=['grupe', 'profesori'], help="Type of schedule to download: grupe, profesori.")
+    
+    # Parse the arguments
+    args = parser.parse_args()
+    
+    # Define the filter words (as per the original implementation)
+    filter_words = ["grupe", "grupelor", "profesori", "profesorilor"]
+    
+    # Define the URLs to search
+    urls = ['https://fmi.unibuc.ro/orar-2020-2021/', 'https://fmi.unibuc.ro/orar-2021-2022/', 
+            'https://fmi.unibuc.ro/orar-2022-2023/', 'https://fmi.unibuc.ro/orar/orar-2023-2024/', 
+            'https://fmi.unibuc.ro/orar/']
+    
+    # Simulating the function to get links based on URLs and filter_words
+    bitly_links = get_hrefs_with_data_type(urls, filter_words)
+    
+    # If a year range is passed, process it to create the list of years
+    if args.year_range:
+        year_list = parse_year_range(args.year_range)
+    else:
+        # If no year range is passed, use all available years from the links
+        year_list = list(set([link['year'] for link in bitly_links]))
+
+    # Map semester argument to appropriate semester filter, if passed
+    semesters = [args.semester] if args.semester else None
+
+    # Schedule type filter (grupe, profesori), if passed
+    schedule_type = args.schedule_type
+
+    # Setup Selenium driver
+    driver = setup_selenium()
+
+    # Filter links by year, semester, and schedule type
+    filtered_links = []
+    for link in bitly_links:
+        if link['year'] in year_list:
+            filtered_links.extend(filter_links_by_semester_and_type([link], semesters, schedule_type))
+    
+    try:
+        enriched_results = enrich_link_data(driver, filtered_links)
     finally:
         driver.quit()
 
-if __name__ == "__main__":
-    target_url = "https://fmi.unibuc.ro/orar/"
-    # target_url = "https://fmi.unibuc.ro/orar/orar-2023-2024/"
-    print(f"Fetching all hrefs with data-type='URL' from {target_url}...\n")
-    get_hrefs_with_data_type(
-        url=target_url,
-    )
+    # Download the schedules based on the filtered results
+    for result in enriched_results:
+        path = f"{result['year']}/sem{result['semester']}"
+        os.makedirs(path, exist_ok=True)
+        path += "/" + copy.deepcopy(result['text'])
+        img_default_link = copy.deepcopy(result['img_default_link'])
+        json_default_link = copy.deepcopy(result['json_default_link'])
+        download_schedule(path, result['num_pages'], img_default_link, json_default_link)
