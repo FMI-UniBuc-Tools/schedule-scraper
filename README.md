@@ -12,13 +12,11 @@ The implemented logic can work with any PDF, but this project specifically focus
 - **Asynchronous Downloads**: Since the timetables in question contain hundreds of pages, file downloads are performed asynchronously to optimize the efficiency of the script.
 - **OCR Processing**: In some cases, files may contain pages with only images and no text. To allow content to be searchable throughout the entire PDF, we use the PaddleOCR model to recognize the text that appears in images.
 - **PDF Generation**: Uses ReportLab to create PDF documents with images and overlaid OCR text, maintaining the layout and enabling clickable URLs.
-- **PDF Merging**: Once the necessary images and texts have been downloaded, we overlay the images with the corresponding texts and create the PDF.
-- **Cleanup**: Upon completion of the reconstruction process, the script deletes the temporary files that were generated or downloaded.
 
 ## Why It Was Implemented This Way:
 
 - It may seem like too many tools are being used for web page manipulation and content downloading, but this is due to the limitations of the requests library (which can retrieve the content of a response from a request but cannot identify the requests made by a site) and the low efficiency of the Selenium library (which is not fast enough for this task, as it loads entire pages and simulates real user input).
-- The introduction of an OCR model might seem like overkill for this project, but its use is necessary when a PDF has not been properly uploaded. We tried several common OCR models, such as pytesseract or EasyOCR, but PaddleOCR achieved the best results in terms of character recognition. Another factor in choosing PaddleOCR was the ease of setup, as PaddleOCR excels here, with its setup consisting simply of installing the libraries via terminal commands.
+- The introduction of an OCR model might seem a little overkill for this project, but its use is necessary when a PDF has not been properly uploaded. We tried several common OCR models, such as pytesseract or EasyOCR, but PaddleOCR achieved the best results in terms of character recognition. Another factor in choosing PaddleOCR was the ease of setup, as PaddleOCR excels here, with its setup consisting simply of installing the libraries via terminal commands.
 
 ## Prerequisites
 
