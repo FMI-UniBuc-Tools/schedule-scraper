@@ -8,6 +8,10 @@ import copy
 import requests
 import aiohttp
 import argparse
+import cv2
+import time
+
+import numpy as np
 
 from paddleocr import PaddleOCR
 from PIL import Image
@@ -15,13 +19,17 @@ from PIL import Image
 from reportlab.lib import pagesizes
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from skimage.morphology import skeletonize
+from skimage.util import img_as_ubyte
+
 
 from bs4 import BeautifulSoup
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-import time
 
 # Set the appropriate event loop policy for Windows platforms
 if sys.platform.startswith('win'):
@@ -40,7 +48,7 @@ async def download_image(session, url, page_number, max_retries=None, cooldown=5
         cooldown (int, optional): Seconds to wait before retrying after a failure.
     """
     modified_url = url.replace("page=0", f"page={page_number}")
-    final_url = re.sub(r'w=\d+', 'w=1600', modified_url)
+    final_url = re.sub(r'w=\d+', 'w=3200', modified_url)
     
     attempt = 0
     while True:
@@ -69,6 +77,28 @@ async def download_image(session, url, page_number, max_retries=None, cooldown=5
         print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [INFO] Retrying image download for page {page_number} after {cooldown} seconds...")
         await asyncio.sleep(cooldown)
 
+def replace_romanian_special_chars(text):
+    """
+    Replaces Romanian special characters with their base Latin equivalents.
+    
+    Args:
+        text (str): The input string containing Romanian characters.
+        
+    Returns:
+        str: The modified string with special characters replaced.
+    """
+    # Define a translation table
+    translation_table = str.maketrans({
+        'Ă': 'A', 'ă': 'a',
+        'Â': 'A', 'â': 'a',
+        'Î': 'I', 'î': 'i',
+        'Ș': 'S', 'ș': 's',
+        'Ț': 'T', 'ț': 't'
+    })
+    
+    # Replace characters using the translation table
+    return text.translate(translation_table)
+
 async def download_text(session, url, page_number, max_retries=None, cooldown=5):
     """
     Asynchronously downloads a text file from a modified URL, processes it, and saves it locally.
@@ -96,11 +126,14 @@ async def download_text(session, url, page_number, max_retries=None, cooldown=5)
                         content_without_first_line = ""
                         print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [WARNING] Text content from page {page_number} has only one line.")
                     
+                    # Replace Romanian special characters
+                    cleared_content = replace_romanian_special_chars(content_without_first_line)
+
                     # Ensure the directory exists
                     os.makedirs("texts", exist_ok=True)
                     file_path = f"texts/text_page_{page_number}.txt"
                     with open(file_path, "w", encoding="utf-8") as f:
-                        f.write(content_without_first_line)
+                        f.write(cleared_content)
                     
                     break 
         except aiohttp.ClientError as e:
@@ -136,6 +169,178 @@ async def download_content(num_pages, img_default_link, json_default_link, max_r
         
         # Run all tasks concurrently
         await asyncio.gather(*tasks)
+
+
+def process_image(input_image_path, thickness=1):
+    """
+    Processes the input image by extracting the table structure, thickening the lines,
+    and thinning them to one pixel width.
+
+    Args:
+        input_image_path (str): Path to the input image.
+        output_image_path (str): Path to save the processed image.
+        thickness (int): Thickness for line dilation. Defaults to 1.
+    """
+    # Load the image
+    img = cv2.imread(input_image_path)
+    if img is None:
+        raise FileNotFoundError(f"Cannot read the image at path: {input_image_path}")
+
+    # Convert to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Apply adaptive thresholding to get binary image
+    binary = cv2.adaptiveThreshold(~gray, 255,
+                                   cv2.ADAPTIVE_THRESH_MEAN_C,
+                                   cv2.THRESH_BINARY, 15, -2)
+
+    # Detect horizontal lines
+    horizontal = binary.copy()
+    cols = horizontal.shape[1]
+    horizontal_size = cols // 30
+    horizontal_structure = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_size, 1))
+    horizontal = cv2.erode(horizontal, horizontal_structure)
+    horizontal = cv2.dilate(horizontal, horizontal_structure)
+
+    # Detect vertical lines
+    vertical = binary.copy()
+    rows = vertical.shape[0]
+    vertical_size = rows // 30
+    vertical_structure = cv2.getStructuringElement(cv2.MORPH_RECT, (1, vertical_size))
+    vertical = cv2.erode(vertical, vertical_structure)
+    vertical = cv2.dilate(vertical, vertical_structure)
+
+    # Combine horizontal and vertical lines
+    table_structure = cv2.add(horizontal, vertical)
+
+    # Find contours and filter out small components to clean up the image
+    contours, _ = cv2.findContours(table_structure, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    mask = np.zeros_like(table_structure)
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area > 100:
+            cv2.drawContours(mask, [cnt], 0, 255, -1)
+
+    # Apply mask to keep only the detected structure
+    table_structure = cv2.bitwise_and(table_structure, mask)
+
+    # Thicken the lines to make them more prominent
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (thickness, thickness))
+    thickened = cv2.dilate(table_structure, kernel, iterations=1)
+
+    # Threshold again to ensure binary image
+    _, thickened = cv2.threshold(thickened, 128, 255, cv2.THRESH_BINARY)
+
+    # Convert to binary format suitable for skeletonization
+    _, binary = cv2.threshold(thickened, 127, 1, cv2.THRESH_BINARY)
+    binary_bool = binary.astype(bool)
+
+    # Apply skeletonization to thin the lines to one pixel width
+    skeleton = skeletonize(binary_bool)
+    skeleton_uint8 = img_as_ubyte(skeleton)
+
+    # Save the processed (thinned) image
+    success = cv2.imwrite(input_image_path, skeleton_uint8)
+    if not success:
+        raise IOError(f"Could not write the image to path: {input_image_path}")
+
+def add_image_to_existing_pdf(image_path, pdf_canvas):
+    """
+    Processes an image and draws its structure onto an existing PDF canvas.
+
+    Args:
+        image_path (str): Path to the processed image.
+        pdf_canvas (canvas.Canvas): Existing ReportLab canvas object to draw on.
+        text_data_path (str, optional): Path to the JSON text data file for overlaying text. Defaults to None.
+
+    Returns:
+        canvas.Canvas: The modified PDF canvas object with the image structure drawn on it.
+    """
+    # Load the image in grayscale
+    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise FileNotFoundError(f"Cannot read the image at path: {image_path}")
+
+    # Threshold the image to make it binary (white lines on black background)
+    _, binary_image = cv2.threshold(image, 127, 255, cv2.THRESH_BINARY)
+
+    # Get the dimensions of the existing PDF canvas
+    width, height = pdf_canvas._pagesize
+
+    # Define the scale factor to convert image coordinates to PDF coordinates
+    scale_x = width / binary_image.shape[1]
+    scale_y = height / binary_image.shape[0]
+
+    # List to store lines to be drawn in the PDF
+    lines_to_draw = []
+
+    # Draw horizontal lines by detecting contiguous segments using numpy
+    for y in range(binary_image.shape[0]):
+        white_pixels = np.where(binary_image[y] == 255)[0]
+        if len(white_pixels) == 0:
+            continue
+
+        diffs = np.diff(white_pixels)
+        segments = np.split(white_pixels, np.where(diffs > 1)[0] + 1)
+
+        for segment in segments:
+            if len(segment) > 1:
+                x_start = segment[0]
+                x_end = segment[-1]
+                lines_to_draw.append(
+                    (x_start * scale_x, height - y * scale_y, x_end * scale_x, height - y * scale_y)
+                )
+
+    # Draw vertical lines by detecting contiguous segments using numpy
+    for x in range(binary_image.shape[1]):
+        white_pixels = np.where(binary_image[:, x] == 255)[0]
+        if len(white_pixels) == 0:
+            continue
+
+        diffs = np.diff(white_pixels)
+        segments = np.split(white_pixels, np.where(diffs > 1)[0] + 1)
+
+        for segment in segments:
+            if len(segment) > 1:
+                y_start = segment[0]
+                y_end = segment[-1]
+                lines_to_draw.append(
+                    (x * scale_x, height - y_start * scale_y, x * scale_x, height - y_end * scale_y)
+                )
+
+    # Draw all collected lines in the PDF
+    pdf_canvas.setStrokeColorRGB(0, 0, 0)
+    pdf_canvas.setLineWidth(0.1)
+    for line in lines_to_draw:
+        pdf_canvas.line(*line)
+
+    return pdf_canvas
+
+
+def calculate_font_size(text, box_width, box_height, font_name, max_font_size=100, min_font_size=6):
+    """
+    Calculate the maximum font size that allows the text to fit within the bounding box.
+
+    Args:
+        text (str): The text to fit.
+        box_width (float): The width of the bounding box.
+        box_height (float): The height of the bounding box.
+        font_name (str): The name of the font.
+        max_font_size (int, optional): The starting font size to try. Defaults to 100.
+        min_font_size (int, optional): The minimum font size allowed. Defaults to 6.
+
+    Returns:
+        int: The optimal font size.
+    """
+    if not text:
+        return min_font_size
+
+    for font_size in range(max_font_size, min_font_size - 1, -1):
+        text_width = stringWidth(text, font_name, font_size)
+        # Assuming that the font's ascent and descent roughly fit within box_height
+        if text_width <= box_width and font_size <= box_height:
+            return font_size
+    return min_font_size
 
 
 def process_page_with_ocr(image_path, c):
@@ -242,7 +447,7 @@ def adjust_y(y, height):
     return height - y
 
 
-def process_page(counter, c, page_width, page_height):
+def process_page(counter, c, page_height):
     """
     Processes a single page by either generating a PDF with OCR text or overlaying existing text data.
 
@@ -262,47 +467,51 @@ This is my current code. How to implement your suggestions?
             data = json.load(f)
 
         unknown, width, height, tree = data[:4]
-    except:
-        print(f"Error reading text file for page {counter}. Using OCR instead.")
-        process_page_with_ocr(image_path, c)
+    except Exception as e:
+        print(f"Error loading JSON data: {e}")
         return
-
-    img = Image.open(image_path)
-    img.save(image_path, format = 'JPEG', quality = 50, optimize = True)
-
-    # Draw the image at (0,0) filling the entire page
-    img_reader = ImageReader(image_path)
-    c.drawImage(
-        img_reader,
-        0,  # x-coordinate
-        0,  # y-coordinate
-        width=page_width,
-        height=page_height,
-        preserveAspectRatio=False,  # Stretch to fill the page
-        mask='auto'  # Handle transparency if present
-    )
+    
+    process_image(image_path)
+    
+    # Draw the image structure onto the PDF
+    c = add_image_to_existing_pdf(image_path, c)
 
     # Initialize text overlay
     text_writer = c.beginText()
-    text_writer.setTextRenderMode(3)  # Invisible text (for OCR overlay)
 
     # Define URL pattern
     url_pattern = re.compile(r'(https?://\S+|www\.\S+|bit\.ly/\S+)', re.IGNORECASE)
     link_annotations = []
 
+    # Define a style for the text
+    styles = getSampleStyleSheet()
+
+    # Customize the style to include a background color
+    highlighted_style = styles["Normal"].clone('highlighted')
+    highlighted_style.backColor = colors.yellow
+
+    # Iterate through the tree structure
     for _, ((_, children),) in tree:
         for (y, x, h, w), node in children:
-            font_size = 9
-            font_name = "Helvetica"  # Ensure a standard font is used
+            text = node.strip()
+            if not text:
+                continue  # Skip empty text
+
+            font_name = "Helvetica-Bold"  # Ensure a standard font is used
+
+            # Calculate optimal font size
+            font_size = calculate_font_size(text, w, h, font_name)
+
+            # Set font and size
             text_writer.setFont(font_name, font_size)
 
             # Adjust Y-coordinate
-            adjusted_y = adjust_y(y, page_height) - 10  # Adjust as needed
+            adjusted_y = adjust_y(y, page_height) - 7.5 # Adjust as needed for padding
             text_writer.setTextOrigin(x, adjusted_y)
-            text_writer.textOut(node)
+            text_writer.textOut(text)
 
             # Detect URLs
-            match = url_pattern.search(node)
+            match = url_pattern.search(text)
             if match:
                 url_text = match.group(0)
                 link_annotations.append({
@@ -367,7 +576,7 @@ def pdf_generator(num_pages, path):
 
     for counter in range(num_pages):
         try:
-            process_page(counter, c, page_width, page_height)
+            process_page(counter, c, page_height)
         except Exception as e:
             print(f"Error processing page {counter}: {e}")
 
