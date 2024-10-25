@@ -61,4 +61,4 @@ Example of terminal command to use the script (this example uses optional argume
 ```console
 python3 main.py --year_range 2023-2024 --semester 1 --schedule_type profesori
 ```
-The `schedule_type` argument has two options: `profesori` and `grupe`.
+The `schedule_type` argument has two options: `profesori` and `grupe`. All the arguments are optional. If one argument is missing from the command, the script will generate the corresponding pdfs for all the filtered options.
