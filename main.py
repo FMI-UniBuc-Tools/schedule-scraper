@@ -213,26 +213,8 @@ def process_image(input_image_path, thickness=1):
     # Combine horizontal and vertical lines
     table_structure = cv2.add(horizontal, vertical)
 
-    # Find contours and filter out small components to clean up the image
-    contours, _ = cv2.findContours(table_structure, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    mask = np.zeros_like(table_structure)
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area > 100:
-            cv2.drawContours(mask, [cnt], 0, 255, -1)
-
-    # Apply mask to keep only the detected structure
-    table_structure = cv2.bitwise_and(table_structure, mask)
-
-    # Thicken the lines to make them more prominent
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (thickness, thickness))
-    thickened = cv2.dilate(table_structure, kernel, iterations=1)
-
-    # Threshold again to ensure binary image
-    _, thickened = cv2.threshold(thickened, 128, 255, cv2.THRESH_BINARY)
-
     # Convert to binary format suitable for skeletonization
-    _, binary = cv2.threshold(thickened, 127, 1, cv2.THRESH_BINARY)
+    _, binary = cv2.threshold(table_structure, 127, 1, cv2.THRESH_BINARY)
     binary_bool = binary.astype(bool)
 
     # Apply skeletonization to thin the lines to one pixel width
@@ -314,7 +296,6 @@ def add_image_to_existing_pdf(image_path, pdf_canvas):
     for line in lines_to_draw:
         pdf_canvas.line(*line)
 
-    return pdf_canvas
 
 
 def calculate_font_size(text, box_width, box_height, font_name, max_font_size=100, min_font_size=6):
@@ -345,7 +326,8 @@ def calculate_font_size(text, box_width, box_height, font_name, max_font_size=10
 
 def process_page_with_ocr(image_path, c):
     """
-    Creates a PDF page from an image by performing OCR to extract text and overlaying the text on the image.
+    Creates a PDF page from an image by performing OCR to extract text,
+    including URL detection and link annotations.
 
     Args:
         image_path (str): The file path to the input image.
@@ -359,29 +341,24 @@ def process_page_with_ocr(image_path, c):
     text_positions = []
     for res in result:
         for line in res:
-            bbox = line[0]
-            text = line[1][0]
+            bbox = line[0]  # Bounding box coordinates
+            text = line[1][0]  # Extracted text
             text_positions.append((bbox, text))
 
-    page_width, page_height = landscape(pagesizes.A4)
+    # Define the PDF page size
+    page_width, page_height = landscape(A4)
 
     # Open the image to get its dimensions
     img = Image.open(image_path)
     img_width, img_height = img.size
 
-    # Draw the image onto the PDF canvas, preserving aspect ratio
-    c.drawImage(
-        image_path,
-        0,
-        0,
-        width=page_width,
-        height=page_height,
-        preserveAspectRatio=True
-    )
+    process_image(image_path)
+
+    # Draw the image onto the PDF
+    add_image_to_existing_pdf(image_path, c)
 
     # Initialize text object for invisible text overlay
     text_writer = c.beginText()
-    text_writer.setTextRenderMode(3)  # 3 = invisible text
 
     # Calculate scaling factors based on image and page dimensions
     img_aspect = img_width / img_height
@@ -400,8 +377,13 @@ def process_page_with_ocr(image_path, c):
     scale_x = scaled_width / img_width
     scale_y = scaled_height / img_height
 
-    # Overlay each detected text onto the PDF
+    # Compile URL pattern for detection
+    url_pattern = re.compile(r'(https?://\S+|www\.\S+|bit\.ly/\S+)', re.IGNORECASE)
+    link_annotations = []
+
+    # Iterate through each detected text block
     for bbox, text in text_positions:
+        # Adjust bounding box coordinates based on scaling and positioning
         adjusted_bbox = []
         for point in bbox:
             adjusted_x = point[0] * scale_x + x_offset
@@ -420,17 +402,48 @@ def process_page_with_ocr(image_path, c):
             font_size -= 0.5
             text_width = c.stringWidth(text, 'Helvetica', font_size)
         
+        # Set font and position for the text overlay
         text_writer.setFont("Helvetica", font_size)
         min_x = min(x_coords)
         min_y = min(y_coords)
         text_writer.setTextOrigin(min_x, min_y)
         text_writer.textOut(text)
-    
-    # Draw the text overlay onto the PDF
+
+        # Detect URLs within the text
+        match = url_pattern.search(text)
+        if match:
+            url_text = match.group(0)
+            # Ensure the URL has a scheme
+            if not re.match(r'^https?://', url_text):
+                actual_url = 'http://' + url_text
+            else:
+                actual_url = url_text
+
+            # Define the rectangle area for the link
+            rect = (min_x, min_y, min_x + bbox_width, min_y + bbox_height)
+            link_annotations.append({
+                'rect': rect,
+                'url': actual_url
+            })
+
+    # Draw the text onto the PDF
     c.drawText(text_writer)
 
-    # Finalize the page and proceed to the next one
+    # Add URL links as annotations
+    for link in link_annotations:
+        rect = link['rect']
+        actual_url = link['url']
+        c.linkURL(actual_url, rect, relative=0, thickness=0)
+
+    # Finalize the page
     c.showPage()
+
+    # Clean up the image file after processing
+    try:
+        os.remove(image_path)
+    except FileNotFoundError:
+        pass
+
 
 
 def adjust_y(y, height):
@@ -440,24 +453,18 @@ def adjust_y(y, height):
     Args:
         y (float): The original y-coordinate.
         height (float): The total height of the page.
-
-    Returns:
-        float: The adjusted y-coordinate.
     """
     return height - y
 
 
-def process_page(counter, c, page_height):
+def process_page(counter, c):
     """
     Processes a single page by either generating a PDF with OCR text or overlaying existing text data.
 
     Args:
         counter (int): The page number to process.
 
-This is my current code. How to implement your suggestions?
         c (canvas.Canvas): The ReportLab canvas object to draw on.
-        page_width (float): The width of the PDF page.
-        page_height (float): The height of the PDF page.
     """
     text_path = f"texts/text_page_{counter}.txt"
     image_path = f"images/image_page_{counter}.jpg"
@@ -468,13 +475,14 @@ This is my current code. How to implement your suggestions?
 
         unknown, width, height, tree = data[:4]
     except Exception as e:
+        process_page_with_ocr(image_path, c)
         print(f"Error loading JSON data: {e}")
         return
     
     process_image(image_path)
     
     # Draw the image structure onto the PDF
-    c = add_image_to_existing_pdf(image_path, c)
+    add_image_to_existing_pdf(image_path, c)
 
     # Initialize text overlay
     text_writer = c.beginText()
@@ -490,6 +498,9 @@ This is my current code. How to implement your suggestions?
     highlighted_style = styles["Normal"].clone('highlighted')
     highlighted_style.backColor = colors.yellow
 
+    _, page_height = landscape(A4)
+
+
     # Iterate through the tree structure
     for _, ((_, children),) in tree:
         for (y, x, h, w), node in children:
@@ -497,16 +508,15 @@ This is my current code. How to implement your suggestions?
             if not text:
                 continue  # Skip empty text
 
-            font_name = "Helvetica-Bold"  # Ensure a standard font is used
+            font_name = "Helvetica-Bold"
 
             # Calculate optimal font size
             font_size = calculate_font_size(text, w, h, font_name)
 
-            # Set font and size
             text_writer.setFont(font_name, font_size)
 
             # Adjust Y-coordinate
-            adjusted_y = adjust_y(y, page_height) - 7.5 # Adjust as needed for padding
+            adjusted_y = adjust_y(y, page_height) - 7.5 # Magic number
             text_writer.setTextOrigin(x, adjusted_y)
             text_writer.textOut(text)
 
@@ -559,16 +569,14 @@ This is my current code. How to implement your suggestions?
 
 def pdf_generator(num_pages, path):
     """
-    Processes all PDF pages, adds them to a single PDF, and performs cleanup.
+    Processes all PDF pages, adds them to a single PDF.
 
     Args:
         num_pages (int): The total number of PDF pages to process.
-        path (str): The file path for the final merged PDF.
+        path (str): The file path for the final PDF.
     """
     # Initialize the ReportLab canvas with landscape A4 size
-    a4_landscape = landscape(A4)
-    page_width, page_height = a4_landscape
-    c = canvas.Canvas(path, pagesize=a4_landscape)
+    c = canvas.Canvas(path, pagesize=landscape(A4))
 
     
     c.setPageCompression(True)
@@ -576,7 +584,7 @@ def pdf_generator(num_pages, path):
 
     for counter in range(num_pages):
         try:
-            process_page(counter, c, page_height)
+            process_page(counter, c)
         except Exception as e:
             print(f"Error processing page {counter}: {e}")
 
