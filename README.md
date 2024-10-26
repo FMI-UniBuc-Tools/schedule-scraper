@@ -14,11 +14,6 @@ The implemented logic can work with any PDF, but this project specifically focus
 - **Image Processing**: Processing the images to retrieve the structure of the tables.
 - **PDF Generation**: Uses ReportLab to create PDF documents with straight lines for the tables and overlaid OCR text, maintaining the layout and enabling clickable URLs.
 
-## Why It Was Implemented This Way:
-
-- It may seem like too many tools are being used for web page manipulation and content downloading, but this is due to the limitations of the requests library (which can retrieve the content of a response from a request but cannot identify the requests made by a site) and the low efficiency of the Selenium library (which is not fast enough for this task, as it loads entire pages and simulates real user input).
-- The introduction of an OCR model might seem a little overkill for this project, but its use is necessary when a PDF has not been properly uploaded. We tried several common OCR models, such as pytesseract or EasyOCR, but PaddleOCR achieved the best results in terms of character recognition. Another factor in choosing PaddleOCR was the ease of setup, as PaddleOCR excels here, with its setup consisting simply of installing the libraries via terminal commands.
-
 ## Prerequisites
 
 ### System Requirements
@@ -61,4 +56,9 @@ Example of terminal command to use the script (this example uses optional argume
 ```console
 python3 main.py --year_range 2023-2024 --semester 1 --schedule_type profesori
 ```
-The `schedule_type` argument has two options: `profesori` and `grupe`. All the arguments are optional. If one argument is missing from the command, the script will generate the corresponding pdfs for all the filtered options.
+
+Use the following command for more details:
+
+```console
+python3 main.py --help
+```
