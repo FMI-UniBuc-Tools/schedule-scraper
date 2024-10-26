@@ -4,7 +4,6 @@ import os
 import re
 import shutil
 import sys
-import copy
 import requests
 import aiohttp
 import argparse
@@ -16,7 +15,6 @@ import numpy as np
 from paddleocr import PaddleOCR
 from PIL import Image
 
-from reportlab.lib import pagesizes
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
@@ -867,22 +865,16 @@ def filter_links_by_semester_and_type(links, semesters=None, schedule_type=None)
     return filtered_links
 
 if __name__ == "__main__":
-    # CLI argument parsing
     parser = argparse.ArgumentParser(description="Download schedules based on year range, semester, and type filter.")
     
-    # Optional: year range argument
     parser.add_argument("--year_range", help="Year range of the form 'year-year' (e.g., 2022-2024). If not provided, downloads all years.")
     
-    # Optional: semester filter (1 for first semester, 2 for second semester)
     parser.add_argument("--semester", type=int, choices=[1, 2], help="Which semester to download: 1 for first, 2 for second.")
     
-    # Optional: type filter (grupe, profesori)
     parser.add_argument("--schedule_type", choices=['grupe', 'profesori'], help="Type of schedule to download: grupe, profesori.")
     
-    # Parse the arguments
     args = parser.parse_args()
     
-    # Define the filter words (as per the original implementation)
     filter_words = ["grupe", "grupelor", "profesori", "profesorilor"]
     
     # Define the URLs to search
@@ -890,7 +882,6 @@ if __name__ == "__main__":
             'https://fmi.unibuc.ro/orar-2022-2023/', 'https://fmi.unibuc.ro/orar/orar-2023-2024/', 
             'https://fmi.unibuc.ro/orar/']
     
-    # Simulating the function to get links based on URLs and filter_words
     bitly_links = get_hrefs_with_data_type(urls, filter_words)
     
     # If a year range is passed, process it to create the list of years
@@ -906,7 +897,6 @@ if __name__ == "__main__":
     # Schedule type filter (grupe, profesori), if passed
     schedule_type = args.schedule_type
 
-    # Setup Selenium driver
     driver = setup_selenium()
 
     # Filter links by year, semester, and schedule type
@@ -924,7 +914,5 @@ if __name__ == "__main__":
     for result in enriched_results:
         path = f"{result['year']}/sem{result['semester']}"
         os.makedirs(path, exist_ok=True)
-        path += "/" + copy.deepcopy(result['text'])
-        img_default_link = copy.deepcopy(result['img_default_link'])
-        json_default_link = copy.deepcopy(result['json_default_link'])
-        download_schedule(path, result['num_pages'], img_default_link, json_default_link)
+        path += "/" + result['text']
+        download_schedule(path, result['num_pages'], result['img_default_link'], result['json_default_link'])
