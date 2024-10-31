@@ -90,8 +90,10 @@ def replace_romanian_special_chars(text):
         'Ă': 'A', 'ă': 'a',
         'Â': 'A', 'â': 'a',
         'Î': 'I', 'î': 'i',
-        'Ș': 'S', 'ş': 's',
-        'Ț': 'T', 'ţ': 't'
+        'Ș': 'S', 'ș': 's',
+        'Ş': 'S', 'ş': 's',
+        'Ț': 'T', 'ț': 't',
+        'Ţ': 'T', 'ţ': 't',
     })
     
     # Replace characters using the translation table
